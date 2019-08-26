@@ -2,6 +2,7 @@
  * This Class provides basic acorn actions
  *
  * Created by Charlie on 2017-09-22.
+ * Updated 2019-08-25
  */
 
 import tough = require('tough-cookie');
@@ -15,9 +16,7 @@ import {BaseAcornAPI} from "./AcornAPI";
 
 const ACORN_HOST = "https://acorn.utoronto.ca";
 const urlTable = {
-    "authURL1": ACORN_HOST + "/sws",
-    "authURL2": "https://weblogin.utoronto.ca/",
-    "authURL3": "https://idp.utorauth.utoronto.ca/PubCookie.reply",
+    "authURL": ACORN_HOST + "/sws",
     "acornURL": ACORN_HOST + "/spACS"
 };
 
@@ -38,39 +37,39 @@ export class BasicAcornAPI extends BaseAcornAPI {
      * @returns Boolean will be true if all processes goes properly
      */
     public async login(user: string, pass: string): Promise<boolean> {
-        let body: string = await rp.get({
-            uri: urlTable.authURL1,
-            jar: this.state.cookieJar
-        });
-        body = await rp.post({
-            uri: urlTable.authURL2,
+        let response = await rp.get({
+            uri: urlTable.authURL,
             jar: this.state.cookieJar,
-            headers: formHeader,
-            form: BasicAcornAPI.extractFormData(body),
-        });
-        let loginInfo = BasicAcornAPI.extractFormData(body);
-        loginInfo['user'] = user;
-        loginInfo['pass'] = pass;
-        body = await rp.post({
-            uri: urlTable.authURL2,
-            jar: this.state.cookieJar,
-            headers: formHeader,
-            form: loginInfo,
+            resolveWithFullResponse: true
         });
 
-        if (body.search('Authentication failed') > -1)
-            throw new AcornError('Invalid Identity');
+        let new_url = response.request.uri
+        let body = response.body
+        let form = BasicAcornAPI.extractFormData(body)
 
-        body = await rp.post({
-            uri: urlTable.authURL3,
-            jar: this.state.cookieJar,
-            headers: formHeader,
-            form: BasicAcornAPI.extractFormData(body),
-            followAllRedirects: true
-        });
+        form["_eventId_proceed"] = ""
+        form["j_username"] = user
+        form["j_password"] = pass
+        
+        try {
+            response = await rp.post({
+                uri: new_url,
+                jar: this.state.cookieJar,
+                headers: formHeader,
+                form: form,
+                resolveWithFullResponse: true
+            });
+        } catch (error) {
+            throw new AcornError('Invalid Credentials');
+        }
 
-        if (body.search('<h1>A problem has occurred</H1>') > -1)
-            throw new AcornError('A problem has occurred');
+        body = response.body
+
+        let SAMLResponse = BasicAcornAPI.extractFormData(body);
+
+        if (!SAMLResponse["SAMLResponse"]) {
+            throw new AcornError('Invalid Credentials');
+        }
 
         body = await rp.post({
             uri: urlTable.acornURL,
@@ -79,6 +78,9 @@ export class BasicAcornAPI extends BaseAcornAPI {
             form: BasicAcornAPI.extractFormData(body),
             followAllRedirects: true
         });
+
+        if (body.search('<h1>A problem has occurred</H1>') > -1)
+            throw new AcornError('A problem has occurred');
 
         if (!(body.search('<title>ACORN</title>') > -1))
             throw new AcornError('Acorn Unavailable Now');
